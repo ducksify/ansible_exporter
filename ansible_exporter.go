@@ -5,49 +5,17 @@ import (
   "fmt"
   "io/ioutil"
   "encoding/json"
+  "time"
   log "github.com/sirupsen/logrus"
   "github.com/prometheus/client_golang/prometheus"
   "github.com/prometheus/client_golang/prometheus/promauto"
   "github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func recordMetrics() {
-  opsProcessed.Inc()
-//         go func() {
-//                 for {
-//                         opsProcessed.Inc()
-//                 }
-//         }()
-}
-
-func gaugeTestChangeValue() {
-  testGauge.WithLabelValues("myhost", "myPB").Add(4)
-  testGauge.WithLabelValues("myhost", "myPB3").Add(8)
-//         go func() {
-//                 for {
-//                         opsProcessed.Inc()
-//                 }
-//         }()
-}
-
 var (
-        opsProcessed = promauto.NewCounter(prometheus.CounterOpts{
-                Name: "myapp_processed_ops_total",
-                Help: "The total number of processed events",
-        })
-        testGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-             Name:      "my_gauge_test",
-             Help:      "Test pour gauge",
-        },
-        []string{
-            // Which user has requested the operation?
-            "host",
-            // Of what type is the operation?
-            "playbook",
-        })
-        ansibleGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-             Name:      "ansible_stats",
-             Help:      "Test pour gauge ansible_stats",
+        ansibleRunStatGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+             Name:      "ansible_play_stats",
+             Help:      "Ansible stats status per playbook per host",
         },
         []string{
             // Which user has requested the operation?
@@ -56,71 +24,104 @@ var (
             "host",
             "status",
         })
+        ansiblePlayDurationGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+             Name:      "ansible_play_duration_sec",
+             Help:      "Duration of the playbook run",
+        },
+        []string{
+            // Which user has requested the operation?
+            "playbook",
+            // Of what type is the operation?
+            "host",
+        })
+        ansiblePlayStartGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+             Name:      "ansible_play_date_start_tsunix",
+             Help:      "Unix timestamp start",
+        },
+        []string{
+            // Which user has requested the operation?
+            "playbook",
+            // Of what type is the operation?
+            "host",
+        })
+        ansiblePlayEndGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+             Name:      "ansible_play_end_start_tsunix",
+             Help:      "Unix timestamp end",
+        },
+        []string{
+            // Which user has requested the operation?
+            "playbook",
+            // Of what type is the operation?
+            "host",
+        })
 )
 
 func main() {
 
-  recordMetrics()
-  //Create a new instance of the foocollector and
-  //register it with the prometheus client.
-  // foo := newFooCollector()
-  // prometheus.MustRegister(foo)
-
-  h2 := func(w http.ResponseWriter, r *http.Request) {
+  processPlaybookJson := func(w http.ResponseWriter, r *http.Request) {
 
     switch r.Method {
     case "POST":
-        recordMetrics()
-
-
 
         body, err := ioutil.ReadAll(r.Body)
         if err != nil {
             panic(err)
         }
-        // log.Println(string(body))
-
-
 
         var result map[string]interface{}
         json.Unmarshal([]byte(body), &result)
 
-
         global_custom_stats := result["global_custom_stats"].(map[string]interface{})
-
         var playbook = ""
-
         for key, value := range global_custom_stats {
           // Each value is an interface{} type, that is type asserted as a string
-          playbook = value.(string)
-          log.Println(string(key) + " " + value.(string))
+          if(key != "") {
+             playbook = value.(string)
+          }
         }
+
+        plays := result["plays"].([]interface {})
+
+        var date_start_unix_out, date_end_unix_out int64 = 0, 0
+        //duration_sec := 0
+
+        for key := range plays {
+            //log.Println(plays[key]["play"])
+            keysPerHost := plays[key].(map[string]interface{})
+
+            for keyH, valueH := range keysPerHost {
+                if (keyH == "play") {
+                    date_layout := "2006-01-02T15:04:05.000000Z"
+                    date_start := valueH.(map[string]interface {})["duration"].(map[string]interface {})["start"].(string)
+                    date_end := valueH.(map[string]interface {})["duration"].(map[string]interface {})["end"].(string)
+                    date_start_unix, _ := time.Parse(date_layout, date_start)
+                    date_end_unix, _ := time.Parse(date_layout, date_end)
+                    date_start_unix_out = date_start_unix.Unix()
+                    date_end_unix_out = date_end_unix.Unix()
+                }
+            }
+        }
+
 
         stats := result["stats"].(map[string]interface{})
 
-        log.Println(stats["k8s-0-edgeduck-prd"])
+        //log.Println(stats["k8s-0-edgeduck-prd"])
 
-        for key, value := range stats {
+        for key := range stats {
           // Each value is an interface{} type, that is type asserted as a string
-          log.Println(string(key) + " " + playbook + " : ")
-          log.Println(stats[key])
           statsPerHost := stats[key].(map[string]interface{})
-          log.Println(statsPerHost)
+          // stats for duration and timestamp
+          ansiblePlayStartGauge.WithLabelValues(playbook, key).Set(float64(date_start_unix_out))
+          ansiblePlayEndGauge.WithLabelValues(playbook, key).Set(float64(date_end_unix_out))
+          ansiblePlayDurationGauge.WithLabelValues(playbook, key).Set(float64(date_end_unix_out - date_start_unix_out))
 
+          // stats with status
           for keyH, valueH := range statsPerHost {
-
-            s := fmt.Sprintf("%f", valueH.(float64))
-            log.Println(playbook + " ::: " + key + " :: " + keyH + " : " + s)
-            ansibleGauge.WithLabelValues(playbook, key, keyH).Set(valueH.(float64))
-          }
-
-          if (value == "" ) {
-            log.Println("hello")
+            ansibleRunStatGauge.WithLabelValues(playbook, key, keyH).Set(valueH.(float64))
           }
         }
 
-        gaugeTestChangeValue()
-        fmt.Fprintf(w, "POST RECEIVED")
+        fmt.Fprintf(w, "POST RECEIVED AND PROCESSED")
     default:
         fmt.Fprintf(w, "Sorry, only POST methods are supported.")
     }
@@ -129,7 +130,7 @@ func main() {
   //This section will start the HTTP server and expose
   //any metrics on the /metrics endpoint.
   http.Handle("/metrics", promhttp.Handler())
-  http.HandleFunc("/endpoint", h2)
-  log.Info("Beginning to serve on port :8080")
-  log.Fatal(http.ListenAndServe(":8080", nil))
+  http.HandleFunc("/ansible_injest", processPlaybookJson)
+  log.Info("Beginning to serve on port :9515")
+  log.Fatal(http.ListenAndServe(":9515", nil))
 }
