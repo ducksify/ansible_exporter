@@ -98,6 +98,7 @@ func main() {
                     date_end_unix, _ := time.Parse(date_layout, date_end)
                     date_start_unix_out = date_start_unix.Unix()
                     date_end_unix_out = date_end_unix.Unix()
+                    playbook = valueH.(map[string]interface {})["name"].(string)
                 }
             }
         }
