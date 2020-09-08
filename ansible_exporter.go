@@ -23,6 +23,12 @@ type AnsibleStats struct {
     Unreachable int `json:"unreachable"`
 }
 
+type AnsibleHostRun struct {
+    Action       string        `json:"action"`
+    Changed      bool          `json:"changed"`
+    Deprecations []interface{} `json:"deprecations"`
+    Warnings     []interface{} `json:"warnings"`
+}
 
 type AnsibleJsonRun struct {
 	CustomStats struct {
@@ -39,7 +45,15 @@ type AnsibleJsonRun struct {
 			Name string `json:"name"`
 		} `json:"play"`
 		Tasks []struct {
-            Hosts map[string]interface{} `json:"hosts"`
+            Hosts map[string]AnsibleHostRun `json:"hosts"`
+            Task struct {
+                Duration struct {
+                    End   time.Time `json:"end"`
+                    Start time.Time `json:"start"`
+                } `json:"duration"`
+                ID   string `json:"id"`
+                Name string `json:"name"`
+            } `json:"task"`
 		} `json:"tasks"`
 	} `json:"plays"`
 	Stats map[string]AnsibleStats `json:"stats"`
@@ -127,6 +141,18 @@ func main() {
         }
 
         fmt.Fprintf(w, "POST RECEIVED AND PROCESSED")
+
+        for task := range ansible_run_data.Plays[0].Tasks {
+            fmt.Println(ansible_run_data.Plays[0].Tasks[task].Task.Name)
+
+            for hostRun := range ansible_run_data.Plays[0].Tasks[task].Hosts {
+                fmt.Println(hostRun)
+                fmt.Println(ansible_run_data.Plays[0].Tasks[task].Hosts[hostRun].Action)
+                fmt.Println(ansible_run_data.Plays[0].Tasks[task].Hosts[hostRun].Changed)
+            }
+        }
+
+
     default:
         fmt.Fprintf(w, "Sorry, only POST methods are supported.")
     }
