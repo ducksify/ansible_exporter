@@ -12,6 +12,39 @@ import (
   "github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+
+type AnsibleStats struct {
+    Changed     int `json:"changed"`
+    Failures    int `json:"failures"`
+    Ignored     int `json:"ignored"`
+    Ok          int `json:"ok"`
+    Rescued     int `json:"rescued"`
+    Skipped     int `json:"skipped"`
+    Unreachable int `json:"unreachable"`
+}
+
+
+type AnsibleJsonRun struct {
+	CustomStats struct {
+	} `json:"custom_stats"`
+	GlobalCustomStats struct {
+	} `json:"global_custom_stats"`
+	Plays []struct {
+		Play struct {
+			Duration struct {
+				End   time.Time `json:"end"`
+				Start time.Time `json:"start"`
+			} `json:"duration"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"play"`
+		Tasks []struct {
+            Hosts map[string]interface{} `json:"hosts"`
+		} `json:"tasks"`
+	} `json:"plays"`
+	Stats map[string]AnsibleStats `json:"stats"`
+}
+
 var (
         ansibleRunStatGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
              Name:      "ansible_play_stats",
@@ -68,58 +101,29 @@ func main() {
             panic(err)
         }
 
-        var result map[string]interface{}
-        json.Unmarshal([]byte(body), &result)
+        jsonData := []byte(body)
 
-        global_custom_stats := result["global_custom_stats"].(map[string]interface{})
-        var playbook = ""
-        for key, value := range global_custom_stats {
-          // Each value is an interface{} type, that is type asserted as a string
-          if(key != "") {
-             playbook = value.(string)
-          }
+        var ansible_run_data AnsibleJsonRun
+        if json.Unmarshal(jsonData, &ansible_run_data) != nil {
+            log.Println(err)
         }
 
-        plays := result["plays"].([]interface {})
+        var playbook = ansible_run_data.Plays[0].Play.Name
+        var date_start_unix_out = ansible_run_data.Plays[0].Play.Duration.Start.Unix()
+        var date_end_unix_out = ansible_run_data.Plays[0].Play.Duration.End.Unix()
 
-        var date_start_unix_out, date_end_unix_out int64 = 0, 0
-        //duration_sec := 0
-
-        for key := range plays {
-            //log.Println(plays[key]["play"])
-            keysPerHost := plays[key].(map[string]interface{})
-
-            for keyH, valueH := range keysPerHost {
-                if (keyH == "play") {
-                    date_layout := "2006-01-02T15:04:05.000000Z"
-                    date_start := valueH.(map[string]interface {})["duration"].(map[string]interface {})["start"].(string)
-                    date_end := valueH.(map[string]interface {})["duration"].(map[string]interface {})["end"].(string)
-                    date_start_unix, _ := time.Parse(date_layout, date_start)
-                    date_end_unix, _ := time.Parse(date_layout, date_end)
-                    date_start_unix_out = date_start_unix.Unix()
-                    date_end_unix_out = date_end_unix.Unix()
-                    playbook = valueH.(map[string]interface {})["name"].(string)
-                }
-            }
-        }
-
-
-        stats := result["stats"].(map[string]interface{})
-
-        //log.Println(stats["k8s-0-edgeduck-prd"])
-
-        for key := range stats {
-          // Each value is an interface{} type, that is type asserted as a string
-          statsPerHost := stats[key].(map[string]interface{})
-          // stats for duration and timestamp
+        for key := range ansible_run_data.Stats {
           ansiblePlayStartGauge.WithLabelValues(playbook, key).Set(float64(date_start_unix_out))
           ansiblePlayEndGauge.WithLabelValues(playbook, key).Set(float64(date_end_unix_out))
           ansiblePlayDurationGauge.WithLabelValues(playbook, key).Set(float64(date_end_unix_out - date_start_unix_out))
 
-          // stats with status
-          for keyH, valueH := range statsPerHost {
-            ansibleRunStatGauge.WithLabelValues(playbook, key, keyH).Set(valueH.(float64))
-          }
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Changed").Set(float64(ansible_run_data.Stats[key].Changed))
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Failures").Set(float64(ansible_run_data.Stats[key].Failures))
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Ignored").Set(float64(ansible_run_data.Stats[key].Ignored))
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Ok").Set(float64(ansible_run_data.Stats[key].Ok))
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Rescued").Set(float64(ansible_run_data.Stats[key].Rescued))
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Skipped").Set(float64(ansible_run_data.Stats[key].Skipped))
+          ansibleRunStatGauge.WithLabelValues(playbook, key, "Unreachable").Set(float64(ansible_run_data.Stats[key].Unreachable))
         }
 
         fmt.Fprintf(w, "POST RECEIVED AND PROCESSED")
